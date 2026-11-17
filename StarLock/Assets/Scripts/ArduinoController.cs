@@ -4,24 +4,29 @@ using UnityEngine;
 
 public class ArduinoController : MonoBehaviour
 {
-    private SerialPort stream = new SerialPort("COM6", 9600);
+    [Header("Configuración Puerto Serie")]
+    public string portName = "COM6";
+    public int baudRate = 9600;
+    public float smoothSpeed = 10f;
 
+    private SerialPort stream;
     private float pitch = 0f;
     private float roll = 0f;
 
     void Start()
     {
+        stream = new SerialPort(portName, baudRate);
         try
         {
             stream.ReadTimeout = 50;
             stream.DtrEnable = true;
             stream.RtsEnable = true;
             stream.Open();
-            Debug.Log("Puerto abierto con Ã©xito.");
+            Debug.Log("Puerto serie abierto correctamente.");
         }
         catch (Exception e)
         {
-            Debug.LogError("Error al abrir puerto: " + e.Message);
+            Debug.LogError("Error al abrir puerto serie: " + e.Message);
         }
     }
 
@@ -31,52 +36,58 @@ public class ArduinoController : MonoBehaviour
         {
             try
             {
-                string value = stream.ReadLine();
-
-                // Limpieza de caracteres invisibles
-                value = value.Trim().Replace("\r", "").Replace("\n", "").Replace("\t", "");
-
-                if (!string.IsNullOrEmpty(value))
+                // Leer y vaciar el buffer serie acumulado para tomar solo la última línea recibida
+                string latestLine = null;
+                while (stream.BytesToRead > 0)
                 {
-                    string[] values = value.Split(',');
+                    latestLine = stream.ReadLine();
+                }
 
-                    // MODIFICADO: Aceptamos que vengan 2 O MÃS valores (como tus 3 valores actuales)
-                    if (values.Length >= 2)
-                    {
-                        // Tomamos el primer valor para Pitch y el segundo para Roll
-                        string pitchStr = values[0].Trim();
-                        string rollStr = values[1].Trim();
-
-                        // Intentamos convertir usando la configuraciÃ³n del punto decimal (.)
-                        bool pitchOk = float.TryParse(pitchStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float nuevoPitch);
-                        bool rollOk = float.TryParse(rollStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float nuevoRoll);
-
-                        if (pitchOk && rollOk)
-                        {
-                            pitch = nuevoPitch;
-                            roll = nuevoRoll;
-
-                            // Mensaje de Ã©xito en la consola
-                            Debug.Log($"[Ã‰XITO] Moviendo Cubo -> Pitch: {pitch} | Roll: {roll}");
-
-                            // Aplicamos la rotaciÃ³n al cubo
-                            transform.rotation = Quaternion.Euler(pitch, 0f, -roll);
-                        }
-                        else
-                        {
-                            Debug.LogWarning($"[ERROR FORMATO] No se pudo convertir a nÃºmero. Pitch=[{pitchStr}], Roll=[{rollStr}]");
-                        }
-                    }
-                    else
-                    {
-                        Debug.LogWarning($"[ERROR DATOS] Faltan datos en la lÃ­nea. Texto recibido: [{value}]");
-                    }
+                if (!string.IsNullOrEmpty(latestLine))
+                {
+                    ProcesarLectura(latestLine);
                 }
             }
             catch (TimeoutException) { }
             catch (Exception e)
             {
-                Debug.LogError("Error inesperado: " + e.Message);
+                Debug.LogError("Error en la lectura serie: " + e.Message);
+            }
+
+            // Aplicar la rotación de forma suave
+            Quaternion targetRotation = Quaternion.Euler(pitch, 0f, -roll);
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * smoothSpeed);
+        }
+    }
+
+    void ProcesarLectura(string rawData)
+    {
+        string cleanData = rawData.Trim().Replace("\r", "").Replace("\n", "").Replace("\t", "");
+
+        // Detección del comando DISPARO definido en la bitácora
+        if (cleanData.Equals("DISPARO", StringComparison.OrdinalIgnoreCase))
+        {
+            Debug.Log("[EVENTO] Disparo detectado desde el pulsador físico.");
+            return;
+        }
+
+        // Eliminar prefijo "MOT:" si viene en la trama según el protocolo
+        if (cleanData.StartsWith("MOT:", StringComparison.OrdinalIgnoreCase))
+        {
+            cleanData = cleanData.Substring(4);
+        }
+
+        string[] values = cleanData.Split(',');
+
+        if (values.Length >= 2)
+        {
+            bool pitchOk = float.TryParse(values[0].Trim(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float nuevoPitch);
+            bool rollOk = float.TryParse(values[1].Trim(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float nuevoRoll);
+
+            if (pitchOk && rollOk)
+            {
+                pitch = nuevoPitch;
+                roll = nuevoRoll;
             }
         }
     }
